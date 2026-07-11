@@ -4,7 +4,7 @@ import { useResilientStream } from '../../hooks/useResilientStream';
 import StreamFallbackBanner from '../../components/stream/StreamFallbackBanner';
 import { downloadPartialStreamContent } from '../../utils/streamResilience';
 import { Send, Bot, User, CheckCircle, ArrowLeft, Loader2, History, Plus, MessageSquare, Paperclip, Scan, FileText, X, Mic, StopCircle, Volume2, Shield, AlertTriangle, CheckCircle2, Eye, UserCircle2 } from 'lucide-react';
-import { vakilFriendAPI } from '../../services/api';
+import { vakilFriendAPI, documentAPI } from '../../services/api';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,6 +12,7 @@ import { API_BASE_URL } from '../../config/apiConfig';
 import AvatarPanel from '../../components/avatar/AvatarPanel';
 import { useTranslation } from 'react-i18next';
 import useChatStore from '../../store/chatStore';
+import CaseSummaryViewer from '../../components/Summary/CaseSummaryViewer';
 
 export default function VakilFriendChat() {
     const { t } = useTranslation('litigant');
@@ -19,6 +20,8 @@ export default function VakilFriendChat() {
     const [inputMessage, setInputMessage] = useState('');
     const [sessionId, setSessionId] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [rateLimited, setRateLimited] = useState(false);
+    const [cooldown, setCooldown] = useState(0);
     const [isStarting, setIsStarting] = useState(true);
     const [readyToFile, setReadyToFile] = useState(false);
     const [isCompleting, setIsCompleting] = useState(false);
@@ -246,6 +249,21 @@ const {
         return legalKeywords.some(kw => lower.includes(kw));
     };
 
+    const startCooldown = (seconds = 60) => {
+        setRateLimited(true);
+        setCooldown(seconds);
+        const interval = setInterval(() => {
+            setCooldown(prev => {
+                if (prev <= 1) {
+                    clearInterval(interval);
+                    setRateLimited(false);
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+    };
+
     const sendMessage = async (audioData = null, overrideText = null) => {
         const textToSend = overrideText || inputMessage;
         if ((!textToSend.trim() && !audioData) || isLoading || isStarting) return;
@@ -316,10 +334,19 @@ const {
             setReadyToFile(data.readyToFile);
         } catch (err) {
             console.error('Failed to send message:', err);
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: t('vakilFriend.sendError')
-            }]);
+            if (err.response?.status === 429) {
+                const retryAfter = parseInt(err.response.headers['retry-after'] || '60');
+                startCooldown(retryAfter);
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: `⏳ You've sent too many messages. Please wait **${retryAfter} seconds** before continuing.`
+                }]);
+            } else {
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: t('vakilFriend.sendError')
+                }]);
+            }
         } finally {
             setIsLoading(false);
         }
@@ -834,16 +861,9 @@ const startDeepResearch = async (query) => {
 
             } else {
                 // Fallback to simple upload if no session
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('category', 'EVIDENCE');
-                formData.append('description', `Uploaded during case filing via Nyay Saarthi chat`);
-
-                const token = localStorage.getItem('token');
-                const response = await axios.post(`${API_BASE_URL}/api/documents/upload`, formData, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                const response = await documentAPI.upload(file, {
+                    category: 'EVIDENCE',
+                    description: 'Uploaded during case filing via Nyay Saarthi chat'
                 });
 
                 setAttachedFiles(prev => prev.map(f =>
@@ -1258,9 +1278,12 @@ const startDeepResearch = async (query) => {
                         }}>
                             <div style={{ color: '#64748b', fontSize: '0.8rem', fontWeight: '700', marginBottom: '0.75rem' }}>{t('vakilFriend.aiSummary')}</div>
                             <p style={{ color: '#334155', fontSize: '1rem', lineHeight: '1.6', margin: 0 }}>
-                                {documentAnalysis.summary || t('vakilFriend.summaryPending')}
-                            </p>
                         </div>
+
+                        {/* Case Summary Viewer */}
+                        {documentAnalysis.case_summary && (
+                            <CaseSummaryViewer caseSummary={documentAnalysis.case_summary} />
+                        )}
 
                         {/* Key Points Section */}
                         {documentAnalysis.keyPoints && documentAnalysis.keyPoints.length > 0 && (
@@ -1882,26 +1905,26 @@ const startDeepResearch = async (query) => {
 
                         <button
                             onClick={() => sendMessage()}
-                            disabled={!inputMessage.trim() || isLoading || isStarting}
+                            disabled={!inputMessage.trim() || isLoading || isStarting || rateLimited}
                             style={{
                                 padding: '0.75rem 1rem',
-                                background: (!inputMessage.trim() || isLoading || isStarting)
+                                background: (!inputMessage.trim() || isLoading || isStarting || rateLimited)
                                     ? 'var(--bg-glass-strong)'
                                     : 'var(--color-primary)',
                                 border: 'none',
                                 borderRadius: '0.625rem',
-                                color: (!inputMessage.trim() || isLoading || isStarting) ? 'var(--text-secondary)' : 'white',
-                                cursor: (!inputMessage.trim() || isLoading || isStarting) ? 'not-allowed' : 'pointer',
+                                color: (!inputMessage.trim() || isLoading || isStarting || rateLimited) ? 'var(--text-secondary)' : 'white',
+                                cursor: (!inputMessage.trim() || isLoading || isStarting || rateLimited) ? 'not-allowed' : 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                boxShadow: (!inputMessage.trim() || isLoading || isStarting)
+                                boxShadow: (!inputMessage.trim() || isLoading || isStarting || rateLimited)
                                     ? 'none'
                                     : '0 4px 15px rgba(30, 42, 68, 0.4)',
                                 transition: 'all 0.2s'
                             }}
                         >
-                            <Send size={20} />
+                            {rateLimited ? <span style={{fontSize:'0.75rem', fontWeight:'700'}}>{cooldown}s</span> : <Send size={20} />}
                         </button>
                     </div>
                 </div>
