@@ -173,6 +173,7 @@ public class HearingController {
         }
     }
     
+    // Access check runs BEFORE getHearing() to prevent any data leak before authorization.
     @GetMapping("/{hearingId}")
     public ResponseEntity<?> getHearing(
             @PathVariable UUID hearingId,
@@ -261,6 +262,7 @@ public class HearingController {
         }
     }
     
+    /** Resolves the authenticated user entity from the JWT email claim. */
     private User resolveUser(Authentication authentication) {
         return authService.findByEmail(authentication.getName());
     }

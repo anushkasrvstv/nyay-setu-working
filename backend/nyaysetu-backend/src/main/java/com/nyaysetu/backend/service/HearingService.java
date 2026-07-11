@@ -224,6 +224,18 @@ public class HearingService {
         return participantRepository.existsByHearingIdAndUserId(hearingId, userId);
     }
 
+    /**
+     * Checks whether a user is authorized to view a hearing's details (including videoRoomId).
+     * Access is granted if the user is any of:
+     *   1. An admin/tech-admin (global access)
+     *   2. The judge assigned to the hearing's parent case
+     *   3. The client (litigant) of the hearing's parent case
+     *   4. The lawyer of the hearing's parent case
+     *   5. A registered participant of the hearing
+     *
+     * This prevents any authenticated user from enumerating hearing IDs
+     * to extract videoRoomId values and eavesdrop on WebRTC sessions.
+     */
     public boolean canUserAccessHearing(UUID hearingId, Long userId) {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
@@ -268,6 +280,10 @@ public class HearingService {
         return false;
     }
 
+    /**
+     * Checks whether a user is authorized to view a case's hearing list.
+     * Same rules as canUserAccessHearing() but operates on the case level.
+     */
     public boolean canUserAccessCase(UUID caseId, Long userId) {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
@@ -305,12 +321,14 @@ public class HearingService {
         return false;
     }
 
+    /** Throws AccessDeniedException if the user cannot access the hearing. */
     public void enforceHearingAccess(UUID hearingId, Long userId) {
         if (!canUserAccessHearing(hearingId, userId)) {
             throw new AccessDeniedException("You do not have access to this hearing");
         }
     }
 
+    /** Throws AccessDeniedException if the user cannot access the case. */
     public void enforceCaseAccess(UUID caseId, Long userId) {
         if (!canUserAccessCase(caseId, userId)) {
             throw new AccessDeniedException("You do not have access to this case");
