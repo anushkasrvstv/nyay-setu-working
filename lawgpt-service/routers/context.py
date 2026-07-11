@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from lawgpt.retriever import retrieve, is_index_loaded, get_chunk_count
+from lawgpt.retriever import retrieve, is_index_loaded, get_chunk_count, retrieve_with_scores
 
 load_dotenv()
 logger = logging.getLogger("lawgpt")
@@ -215,15 +215,33 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     # Call LLM
     prompt: str = LEGAL_PROMPT_TEMPLATE.format(context=context, question=request.question)
-    try:
-        llm = get_llm()
-        answer: str = llm.invoke(prompt)
-        # LangChain LLMs may return AIMessage or str
-        if hasattr(answer, "content"):
-            answer = answer.content
-    except Exception as e:
-        logger.error("LLM invocation error: %s", e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    
+    from utils.query_cache import get_cached_response, set_cached_response, is_static_query
+    
+    cached_answer = None
+    if is_static_query(request.question):
+        cached_answer = get_cached_response(request.question)
+        if cached_answer:
+            logger.info("Cache hit for legal query")
+            answer = cached_answer
+        else:
+            logger.info("Cache miss for legal query")
+            
+    if not cached_answer:
+        try:
+            llm = get_llm()
+            answer_raw = llm.invoke(prompt)
+            # LangChain LLMs may return AIMessage or str
+            if hasattr(answer_raw, "content"):
+                answer = answer_raw.content
+            else:
+                answer = answer_raw
+                
+            if is_static_query(request.question):
+                set_cached_response(request.question, answer)
+        except Exception as e:
+            logger.error("LLM invocation error: %s", e, exc_info=True)
+            raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
     return ChatResponse(
         answer=str(answer),
@@ -246,3 +264,26 @@ async def health() -> HealthResponse:
         model=_resolve_llm_label(),
         chunk_count=get_chunk_count(),
     )
+
+
+class SearchItem(BaseModel):
+    page_content: str
+    source: str
+    page: int
+    relevance: float
+
+
+class SearchRequest(BaseModel):
+    query: str
+    k: int = Field(default=5, ge=1, le=20)
+
+
+@router.post("/search", response_model=List[SearchItem])
+async def search_precedents(request: SearchRequest) -> List[SearchItem]:
+    """Perform advanced semantic search over legal precedents returning matches with scores."""
+    try:
+        results = retrieve_with_scores(query=request.query, k=request.k)
+        return [SearchItem(**item) for item in results]
+    except Exception as e:
+        logger.error("Semantic search error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

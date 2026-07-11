@@ -1,5 +1,7 @@
 package com.nyaysetu.backend.exception;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -15,6 +17,8 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException e) {
@@ -32,10 +36,28 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
     }
 
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException e) {
+        ErrorResponse error = new ErrorResponse("Forbidden", e.getMessage(), 403);
+        return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
+    }
+
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NotFoundException e) {
         ErrorResponse error = new ErrorResponse("Not Found", e.getMessage(), 404);
         return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
+    }
+
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDenied(org.springframework.security.access.AccessDeniedException e) {
+        ErrorResponse error = new ErrorResponse("Forbidden", "You do not have permission to access this resource", 403);
+        return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
+    }
+
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException e) {
+        ErrorResponse error = new ErrorResponse("Conflict", "Database integrity constraint violation occurred", 409);
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -46,8 +68,23 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneric(Exception e) {
-        ErrorResponse error = new ErrorResponse("Internal Server Error", e.getMessage(), 500);
+        // Log full exception server-side only — stack trace must never reach the client
+        logger.error("Unhandled exception: {}", e.getMessage(), e);
+        ErrorResponse error = new ErrorResponse("Internal Server Error", "An unexpected error occurred. Please try again later.", 500);
         return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @ExceptionHandler(UserAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponse> handleUserAlreadyExistsException(
+            UserAlreadyExistsException e) {
+
+        ErrorResponse error = new ErrorResponse(
+                "Conflict",
+                e.getMessage(),
+                409
+        );
+
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 
     public static class ErrorResponse {
