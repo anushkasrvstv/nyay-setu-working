@@ -3,6 +3,8 @@ package com.nyaysetu.backend.controller;
 import com.nyaysetu.backend.entity.Hearing;
 import com.nyaysetu.backend.entity.HearingParticipant;
 import com.nyaysetu.backend.entity.ParticipantRole;
+import com.nyaysetu.backend.entity.User;
+import com.nyaysetu.backend.service.AuthService;
 import com.nyaysetu.backend.service.HearingService;
 import com.nyaysetu.backend.notification.service.NotificationService;
 import com.nyaysetu.backend.notification.entity.Notification;
@@ -30,6 +32,7 @@ public class HearingController {
     
     private final HearingService hearingService;
     private final NotificationService notificationService;
+    private final AuthService authService;
     
     @PostMapping("/schedule")
     public ResponseEntity<Map<String, Object>> scheduleHearing(
@@ -90,8 +93,12 @@ public class HearingController {
     @PostMapping("/{hearingId}/participants")
     public ResponseEntity<Map<String, Object>> addParticipant(
             @PathVariable UUID hearingId,
-            @RequestBody AddParticipantRequest request
+            @RequestBody AddParticipantRequest request,
+            Authentication authentication
     ) {
+        User user = resolveUser(authentication);
+        hearingService.enforceHearingAccess(hearingId, user.getId());
+        
         HearingParticipant participant = hearingService.addParticipant(
                 hearingId,
                 request.getUserId(),
@@ -113,13 +120,13 @@ public class HearingController {
             @PathVariable UUID hearingId,
             Authentication authentication
     ) {
-        Long userId = Long.parseLong(authentication.getName());
+        User user = resolveUser(authentication);
         
-        if (!hearingService.canUserJoinHearing(hearingId, userId)) {
+        if (!hearingService.canUserJoinHearing(hearingId, user.getId())) {
             return ResponseEntity.status(403).body(Map.of("error", "Not authorized"));
         }
         
-        hearingService.joinHearing(hearingId, userId);
+        hearingService.joinHearing(hearingId, user.getId());
         Hearing hearing = hearingService.getHearing(hearingId);
         
         return ResponseEntity.ok(Map.of(
@@ -134,8 +141,8 @@ public class HearingController {
             @PathVariable UUID hearingId,
             Authentication authentication
     ) {
-        Long userId = Long.parseLong(authentication.getName());
-        hearingService.leaveHearing(hearingId, userId);
+        User user = resolveUser(authentication);
+        hearingService.leaveHearing(hearingId, user.getId());
         return ResponseEntity.ok().build();
     }
     
@@ -167,32 +174,59 @@ public class HearingController {
     }
     
     @GetMapping("/{hearingId}")
-    public ResponseEntity<Hearing> getHearing(@PathVariable UUID hearingId) {
-        Hearing hearing = hearingService.getHearing(hearingId);
-        return ResponseEntity.ok(hearing);
+    public ResponseEntity<?> getHearing(
+            @PathVariable UUID hearingId,
+            Authentication authentication
+    ) {
+        try {
+            User user = resolveUser(authentication);
+            hearingService.enforceHearingAccess(hearingId, user.getId());
+            Hearing hearing = hearingService.getHearing(hearingId);
+            return ResponseEntity.ok(hearing);
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+        }
     }
     
     @GetMapping("/{hearingId}/participants")
-    public ResponseEntity<List<HearingParticipant>> getParticipants(@PathVariable UUID hearingId) {
-        List<HearingParticipant> participants = hearingService.getHearingParticipants(hearingId);
-        return ResponseEntity.ok(participants);
+    public ResponseEntity<?> getParticipants(
+            @PathVariable UUID hearingId,
+            Authentication authentication
+    ) {
+        try {
+            User user = resolveUser(authentication);
+            hearingService.enforceHearingAccess(hearingId, user.getId());
+            List<HearingParticipant> participants = hearingService.getHearingParticipants(hearingId);
+            return ResponseEntity.ok(participants);
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+        }
     }
     
     @GetMapping("/case/{caseId}")
-    public ResponseEntity<List<Map<String, Object>>> getCaseHearings(@PathVariable UUID caseId) {
-        List<Hearing> hearings = hearingService.getCaseHearings(caseId);
-        List<Map<String, Object>> response = hearings.stream().map(h -> {
-            Map<String, Object> dto = new HashMap<>();
-            dto.put("id", h.getId());
-            dto.put("scheduledDate", h.getScheduledDate());
-            dto.put("durationMinutes", h.getDurationMinutes());
-            dto.put("status", h.getStatus());
-            dto.put("videoRoomId", h.getVideoRoomId());
-            dto.put("judgeNotes", h.getJudgeNotes());
-            dto.put("createdAt", h.getCreatedAt());
-            return dto;
-        }).toList();
-        return ResponseEntity.ok(response);
+    public ResponseEntity<?> getCaseHearings(
+            @PathVariable UUID caseId,
+            Authentication authentication
+    ) {
+        try {
+            User user = resolveUser(authentication);
+            hearingService.enforceCaseAccess(caseId, user.getId());
+            List<Hearing> hearings = hearingService.getCaseHearings(caseId);
+            List<Map<String, Object>> response = hearings.stream().map(h -> {
+                Map<String, Object> dto = new HashMap<>();
+                dto.put("id", h.getId());
+                dto.put("scheduledDate", h.getScheduledDate());
+                dto.put("durationMinutes", h.getDurationMinutes());
+                dto.put("status", h.getStatus());
+                dto.put("videoRoomId", h.getVideoRoomId());
+                dto.put("judgeNotes", h.getJudgeNotes());
+                dto.put("createdAt", h.getCreatedAt());
+                return dto;
+            }).toList();
+            return ResponseEntity.ok(response);
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/my")
@@ -225,6 +259,10 @@ public class HearingController {
             log.error("Failed to get user hearings", e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+    
+    private User resolveUser(Authentication authentication) {
+        return authService.findByEmail(authentication.getName());
     }
     
     public static class ScheduleHearingRequest {
